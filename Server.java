@@ -1,56 +1,88 @@
 import java.io.*;
 import java.net.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 
 public class Server {
+    private static final int DEFAULT_PORT = 8080;
+    private static final String DEFAULT_HOST = "127.0.0.1";
+    private static final ExecutorService threadPool = Executors.newCachedThreadPool();
+    private static volatile boolean isRunning = true;
+
     public static void main(String[] args) {
-        ExecutorService pool = Executors.newCachedThreadPool();
+        int port = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_PORT;
         
-        try (ServerSocket listener = new ServerSocket(8080)) {
-            System.out.println("Server is listening on 127.0.0.1:8080");
-            
-            while (true) {
-                Socket socket = listener.accept();
-                System.out.println("New connection: " + socket.getRemoteSocketAddress());
-                pool.execute(() -> handleClient(socket));
+        try (ServerSocket serverSocket = new ServerSocket(port)) {
+            System.out.println("🚀 Server started on " + DEFAULT_HOST + ":" + port);
+            System.out.println("📢 Waiting for clients... (Type 'shutdown' to stop the server)");
+
+            // Shutdown hook for Ctrl+C
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                isRunning = false;
+                threadPool.shutdown();
+                System.out.println("\n🔴 Server shutting down...");
+            }));
+
+            // Console input for server commands (e.g., "shutdown")
+            new Thread(() -> handleConsoleInput(serverSocket)).start();
+
+            // Accept client connections
+            while (isRunning) {
+                try {
+                    Socket clientSocket = serverSocket.accept();
+                    System.out.println("\n✅ New client connected: " + clientSocket.getRemoteSocketAddress());
+                    threadPool.execute(() -> handleClient(clientSocket));
+                } catch (SocketException e) {
+                    if (isRunning) System.err.println("⚠️  Socket error: " + e.getMessage());
+                }
             }
         } catch (IOException e) {
-            System.err.println("Server exception: " + e.getMessage());
+            System.err.println("❌ Server error: " + e.getMessage());
+        } finally {
+            threadPool.shutdown();
         }
     }
-    
-    private static void handleClient(Socket socket) {
-        try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-             PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-             BufferedReader consoleIn = new BufferedReader(new InputStreamReader(System.in))) {
+
+    private static void handleClient(Socket clientSocket) {
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+             PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true)) {
             
-            while (true) {
-                // Wait for client message
-                String clientMessage = in.readLine();
-                if (clientMessage == null || clientMessage.equalsIgnoreCase("exit")) {
-                    System.out.println("Client disconnected.");
+            String clientName = clientSocket.getRemoteSocketAddress().toString();
+            System.out.println("👋 [" + clientName + "] Ready for messages.");
+
+            String inputLine;
+            while ((inputLine = in.readLine()) != null) {
+                if (inputLine.equalsIgnoreCase("exit")) {
+                    System.out.println("👋 [" + clientName + "] Disconnected.");
                     break;
                 }
-                
-                System.out.println("User Say: " + clientMessage);
-                
-                // Get server response
-                System.out.print("Server: Enter your reply: ");
-                System.out.flush();
-                String response = consoleIn.readLine();
-                
-                System.out.println("Server sending reply: " + response);
-                out.println(response);
+                System.out.println("📩 [" + clientName + "] Says: " + inputLine);
+                out.println("Server received: '" + inputLine + "'");
             }
         } catch (IOException e) {
-            System.err.println("Error handling client: " + e.getMessage());
+            System.err.println("⚠️  Client error: " + e.getMessage());
         } finally {
             try {
-                socket.close();
+                clientSocket.close();
             } catch (IOException e) {
-                System.err.println("Error closing socket: " + e.getMessage());
+                System.err.println("⚠️  Failed to close client socket: " + e.getMessage());
             }
+        }
+    }
+
+    private static void handleConsoleInput(ServerSocket serverSocket) {
+        try (BufferedReader consoleIn = new BufferedReader(new InputStreamReader(System.in))) {
+            while (isRunning) {
+                String command = consoleIn.readLine();
+                if (command != null && command.equalsIgnoreCase("shutdown")) {
+                    isRunning = false;
+                    serverSocket.close();
+                    threadPool.shutdown();
+                    System.out.println("🔴 Server shutdown initiated.");
+                    break;
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("⚠️  Console input error: " + e.getMessage());
         }
     }
 }
